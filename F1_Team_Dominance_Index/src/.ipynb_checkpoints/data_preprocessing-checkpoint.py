@@ -1,27 +1,33 @@
 """
-data_preprocessing.py
+data_processing.py
 ----------------------
-This module loads and preprocesses Formula 1 datasets to create
-a clean, season-level summary for each constructor (team).
+Handles loading, cleaning, and preprocessing Formula 1 datasets.
+Generates a clean season-level summary for each constructor (team).
 """
 
 import os
-import pandas as pd
 from pathlib import Path
+import pandas as pd
+
 
 def load_data(raw_data_dir):
-    """Loads all CSVs from the raw data directory."""
+    """Loads all CSV files from the raw data directory into a dictionary."""
     datasets = {}
+    if not os.path.exists(raw_data_dir):
+        raise FileNotFoundError(f"❌ Raw data directory not found: {raw_data_dir}")
+
     for file in os.listdir(raw_data_dir):
         if file.endswith(".csv"):
             name = file.replace(".csv", "")
-            datasets[name] = pd.read_csv(os.path.join(raw_data_dir, file))
-            print(f"✅ Loaded {file} ({datasets[name].shape[0]} rows)")
+            path = os.path.join(raw_data_dir, file)
+            df = pd.read_csv(path)
+            datasets[name] = df
+            print(f"✅ Loaded {file} ({df.shape[0]} rows, {df.shape[1]} cols)")
     return datasets
 
 
 def clean_column_names(df):
-    """Standardizes column names to lowercase and snake_case."""
+    """Standardize column names to lowercase and snake_case."""
     df.columns = (
         df.columns.str.strip()
         .str.lower()
@@ -32,28 +38,38 @@ def clean_column_names(df):
 
 
 def preprocess_all(datasets):
-    """Basic preprocessing for key F1 datasets."""
-    # Clean column names
+    """
+    Performs basic preprocessing and merges key datasets.
+    Returns season-level team summary (year, team, races, wins, podiums, total points).
+    """
     for key in datasets:
         datasets[key] = clean_column_names(datasets[key])
 
-    # Merge key datasets
     races = datasets.get("races")
     results = datasets.get("results")
     constructors = datasets.get("constructors")
     standings = datasets.get("constructor_standings")
 
+    # Merge race and team data
     merged = (
         results
-        .merge(races[["raceid", "year", "name", "round"]], on="raceid", how="left")
-        .merge(constructors[["constructorid", "name"]].rename(columns={"name": "team"}), on="constructorid", how="left")
+        .merge(
+            races[["raceid", "year", "name", "round"]],
+            on="raceid",
+            how="left"
+        )
+        .merge(
+            constructors[["constructorid", "name"]].rename(columns={"name": "team"}),
+            on="constructorid",
+            how="left"
+        )
     )
 
-    # Compute season-level summary
+    # Season summary per team
     team_summary = (
         merged.groupby(["year", "team"])
         .agg(
-            total_races=("raceid", "nunique"),
+            races=("raceid", "nunique"),
             wins=("positionorder", lambda x: (x == 1).sum()),
             podiums=("positionorder", lambda x: (x <= 3).sum()),
             total_points=("points", "sum"),
@@ -61,22 +77,37 @@ def preprocess_all(datasets):
         .reset_index()
     )
 
-    # Merge with constructor standings for total season points
+    # Merge with constructor standings for max points in a season
     if standings is not None:
         season_points = (
             standings.groupby(["year", "constructorid"])
             .agg(season_points=("points", "max"))
             .reset_index()
-            .merge(constructors[["constructorid", "name"]].rename(columns={"name": "team"}), on="constructorid", how="left")
+            .merge(
+                constructors[["constructorid", "name"]].rename(columns={"name": "team"}),
+                on="constructorid",
+                how="left"
+            )
         )
         team_summary = team_summary.merge(season_points, on=["year", "team"], how="left")
 
+    print(f"✅ Preprocessed team summary: {team_summary.shape}")
     return team_summary
 
 
 def save_processed_data(df, processed_dir, filename="team_year_summary.csv"):
-    """Saves cleaned dataset to processed folder."""
+    """Saves the preprocessed dataset to processed directory."""
     Path(processed_dir).mkdir(parents=True, exist_ok=True)
-    output_path = os.path.join(processed_dir, filename)
-    df.to_csv(output_path, index=False)
-    print(f"💾 Saved processed file: {output_path}")
+    path = os.path.join(processed_dir, filename)
+    df.to_csv(path, index=False)
+    print(f"💾 Saved processed data → {path}")
+
+
+# Example run (if executed directly)
+if __name__ == "__main__":
+    RAW_DIR = "../data/raw"
+    PROCESSED_DIR = "../data/processed"
+
+    data = load_data(RAW_DIR)
+    summary = preprocess_all(data)
+    save_processed_data(summary, PROCESSED_DIR)
